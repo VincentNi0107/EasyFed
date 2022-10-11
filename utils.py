@@ -11,7 +11,7 @@ import random
 from sklearn.metrics import confusion_matrix
 import sys
 import copy
-from model import *
+# from model import *
 from datasets import CIFAR10_truncated, CIFAR100_truncated, ImageFolder_custom
 
 logging.basicConfig()

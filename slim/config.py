@@ -83,5 +83,5 @@ def get_args():
     cfg['global_width_idx'] = max(cfg['model_width_idx'])
     cfg['client_num'] = len(cfg['model_width_idx'])
     cfg["partition"] = args.partition
-    os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     return args , cfg
