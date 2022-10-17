@@ -44,6 +44,9 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
                               weight_decay=cfg["reg"])
     criterion = nn.CrossEntropyLoss()
     soft_criterion = CrossEntropyLossSoft(reduction='none')
+    # test_acc = []
+    # for idx in range(width_idx+1):         
+    #     test_acc.append(compute_acc(net, idx, test_data_loader)) 
     # test_acc = compute_acc(net, test_data_loader) 
     for epoch in range(cfg["epochs"]):
         for batch_idx, (x, target) in enumerate(train_data_loader):
@@ -92,6 +95,7 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
 args, cfg = get_args()
 X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(args.dataset, args.datadir, args.logdir, args.partition, cfg['client_num'], beta=args.beta)
 
+
 n_party_per_round = int(cfg['client_num'] * args.sample_fraction)
 party_list = [i for i in range(cfg['client_num'])]
 party_list_rounds = []
@@ -118,7 +122,10 @@ global_model = model(cfg, cfg['global_width_idx'])
 global_parameters = global_model.state_dict()
 local_models = []
 local_parameters_dict = dict()
+
+agg_weight = []
 for i in range(cfg['client_num']):
+    agg_weight.append(len(net_dataidx_map[i])/len(X_train))
     local_models.append(model(cfg, cfg['model_width_idx'][i]))
     if cfg['model_width_idx'][i] not in local_parameters_dict:     
         local_parameters_dict[cfg['model_width_idx'][i]] = local_models[i].state_dict()
@@ -131,7 +138,7 @@ for i in range(cfg['client_num']):
 #     print(k)
 # time.sleep(1000)
 
-federation = Federation(global_parameters, local_parameters_dict, cfg)
+federation = Federation(global_parameters, local_parameters_dict, agg_weight, cfg)
 best_result = [0 for _ in range(cfg['global_width_idx']+1)]
 best_acc = 0
 print(cfg)

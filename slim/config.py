@@ -5,7 +5,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='cifar10', help='dataset used for training')
     parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))))
-    parser.add_argument('--partition', type=str, default='homo', help='the data partitioning strategy')
+    parser.add_argument('--partition', type=str, default='noniid', help='the data partitioning strategy')
     parser.add_argument('--batch-size', type=int, default=64, help='input batch size for training (default: 64)')
     parser.add_argument('--lr', type=float, default=0.1, help='learning rate (default: 0.1)')
     parser.add_argument('--epochs', type=int, default=10, help='number of local epochs')
@@ -53,7 +53,7 @@ def get_args():
     cfg["self_dist"] = False
     cfg["recc_dist"] = False
     cfg["nova"] = False
-    cfg["feature_match"] = True
+    cfg["feature_match"] = False
     cfg["fm_idx"] = 0
     if args.dataset in {'mnist', 'cifar10', 'svhn', 'fmnist'}:
         cfg['classes_size'] = 10
@@ -80,8 +80,10 @@ def get_args():
     # cfg['model_width_idx'] = [1,1,1,1,1,1,1,1,1,1,1,1]
     # cfg['model_width_list'] = [1.0]
     cfg['model_width_idx'] = [0,0,0,0,0,0,0,0,0,0,0,0]
+    # cfg['model_width_idx'] = [0,0,0,0,0,0,3,3,3,3,3,3]
     cfg['global_width_idx'] = max(cfg['model_width_idx'])
     cfg['client_num'] = len(cfg['model_width_idx'])
+    args.partition = "noniid"
     cfg["partition"] = args.partition
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "4"
     return args , cfg

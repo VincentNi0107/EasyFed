@@ -514,9 +514,9 @@ def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None, noise_lev
             # ])
             transform_train=transforms.Compose(
             [   
-                # transforms.ToPILImage(),
-                # transforms.RandomCrop(32, padding=4),
-                # transforms.RandomHorizontalFlip(),
+                transforms.ToPILImage(),
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
             # data prep for test set

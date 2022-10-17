@@ -5,13 +5,14 @@ from collections import OrderedDict
 import time
 
 class Federation:
-    def __init__(self, global_parameters, local_parameters_dict, cfg):
+    def __init__(self, global_parameters, local_parameters_dict, agg_weight, cfg):
         self.global_parameters = global_parameters
         self.width_list = cfg['model_width_list']
         self.width_idx_list = cfg['model_width_idx']
         self.global_width_idx = cfg['global_width_idx']
         self.global_rate = self.width_list[cfg['global_width_idx']]
         self.local_parameters_dict = local_parameters_dict
+        self.agg_weight = agg_weight
 
     def distribute(self, user_idx):
         local_parameters = [OrderedDict() for _ in range(len(user_idx))]
@@ -54,31 +55,31 @@ class Federation:
             for m in range(len(local_parameters)):
                 if 'bn' in k:
                     if k in self.local_parameters_dict[self.width_idx_list[user_idx[m]]].keys():
-                        tmp_v += local_parameters[m][k]
-                        count[k] += 1
+                        tmp_v += local_parameters[m][k] * self.agg_weight[user_idx[m]]
+                        count[k] += self.agg_weight[user_idx[m]]
                 elif 'weight' in parameter_type or 'bias' in parameter_type:
                     if parameter_type == 'weight':
                         if v.dim() > 1:
                             input_size = v.size(1)
                             output_size = v.size(0)
                             if 'linear' in k:
-                                tmp_v[:, :int(np.ceil(input_size * width_rate_list[m]))] += local_parameters[m][k]
-                                count[k][:, :int(np.ceil(input_size * width_rate_list[m]))] += 1
+                                tmp_v[:, :int(np.ceil(input_size * width_rate_list[m]))] += local_parameters[m][k] * self.agg_weight[user_idx[m]]
+                                count[k][:, :int(np.ceil(input_size * width_rate_list[m]))] += self.agg_weight[user_idx[m]]
                             elif input_size == 3:
-                                tmp_v[:int(np.ceil(output_size * width_rate_list[m]))] += local_parameters[m][k]
-                                count[k][:int(np.ceil(output_size * width_rate_list[m]))] += 1
+                                tmp_v[:int(np.ceil(output_size * width_rate_list[m]))] += local_parameters[m][k] * self.agg_weight[user_idx[m]]
+                                count[k][:int(np.ceil(output_size * width_rate_list[m]))] += self.agg_weight[user_idx[m]]
                             else:
-                                tmp_v[:int(np.ceil(output_size * width_rate_list[m])), :int(np.ceil(input_size * width_rate_list[m]))] += local_parameters[m][k]
-                                count[k][:int(np.ceil(output_size * width_rate_list[m])), :int(np.ceil(input_size * width_rate_list[m]))] += 1
+                                tmp_v[:int(np.ceil(output_size * width_rate_list[m])), :int(np.ceil(input_size * width_rate_list[m]))] += local_parameters[m][k] * self.agg_weight[user_idx[m]]
+                                count[k][:int(np.ceil(output_size * width_rate_list[m])), :int(np.ceil(input_size * width_rate_list[m]))] += self.agg_weight[user_idx[m]]
                         else:
                             raise ValueError('Invalid weight during model split')
                     else:
                         if 'linear' in k:
-                            tmp_v += local_parameters[m][k]
-                            count[k] += 1
+                            tmp_v += local_parameters[m][k] * self.agg_weight[user_idx[m]]
+                            count[k] += self.agg_weight[user_idx[m]]
                         else:
-                            tmp_v[:int(np.ceil(v.size(0) * width_rate_list[m]))] += local_parameters[m][k]
-                            count[k][:int(np.ceil(v.size(0) * width_rate_list[m]))] += 1
+                            tmp_v[:int(np.ceil(v.size(0) * width_rate_list[m]))] += local_parameters[m][k] * self.agg_weight[user_idx[m]]
+                            count[k][:int(np.ceil(v.size(0) * width_rate_list[m]))] += self.agg_weight[user_idx[m]]
                 else:
                     raise ValueError('Invalid parameter during model split')
             tmp_v[count[k] > 0] = tmp_v[count[k] > 0].div_(count[k][count[k] > 0])
