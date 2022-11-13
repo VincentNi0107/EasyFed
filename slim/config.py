@@ -71,7 +71,7 @@ def get_args():
     # cfg['model_width_list'] = [0.25,0.5,0.75,1.0]
     # cfg['model_width_idx'] = [2]
     # cfg['model_width_list'] = [0.2,0.4,0.6,0.8,1.0]
-    # cfg['model_width_idx'] = [0,0,0,1,1,1,2,2,2,3,3,3]
+    cfg['model_width_idx'] = [0,0,0,1,1,1,2,2,2,3,3,3]
     # cfg['model_width_idx'] = [0,0,0,1,1,1,2,2,2,2,2,2]
     # cfg['model_width_idx'] = [0,0,0,1,1,1,1,1,1,1,1,1]
     # cfg['model_width_idx'] = [3,3,3,3,3,3,3,3,3,3,3,3]
@@ -79,7 +79,7 @@ def get_args():
     # cfg['model_width_idx'] = [2,2,2,2,2,2,2,2,2,2,2,2]
     # cfg['model_width_idx'] = [1,1,1,1,1,1,1,1,1,1,1,1]
     # cfg['model_width_list'] = [1.0]
-    cfg['model_width_idx'] = [0,0,0,0,0,0,0,0,0,0,0,0]
+    # cfg['model_width_idx'] = [0,0,0,0,0,0,0,0,0,0,0,0]
     # cfg['model_width_idx'] = [0,0,0,0,0,0,3,3,3,3,3,3]
     cfg['global_width_idx'] = max(cfg['model_width_idx'])
     cfg['client_num'] = len(cfg['model_width_idx'])

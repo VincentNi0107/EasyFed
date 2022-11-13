@@ -4,9 +4,9 @@ import time
 
 import numpy as np
 import torch
-from slim.config import get_args
-from slim.resnet import resnet18,resnet34,resnet50
-from slim.fed import Federation
+from usfl.config import get_args
+from usfl.resnet import resnet18,resnet34
+from usfl.fed import Federation
 from utils import *
 
 class CrossEntropyLossSoft(torch.nn.modules.loss._Loss):
@@ -44,9 +44,6 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
                               weight_decay=cfg["reg"])
     criterion = nn.CrossEntropyLoss()
     soft_criterion = CrossEntropyLossSoft(reduction='none')
-    # test_acc = []
-    # for idx in range(width_idx+1):         
-    #     test_acc.append(compute_acc(net, idx, test_data_loader)) 
     # test_acc = compute_acc(net, test_data_loader) 
     for epoch in range(cfg["epochs"]):
         for batch_idx, (x, target) in enumerate(train_data_loader):
@@ -54,37 +51,21 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
 
             optimizer.zero_grad()
             target = target.long()
-            if cfg["feature_match"]:
-                for idx in range(width_idx+1):               
-                    out, new_feature = net(x, idx, True)
-                    if round > 2:
-                        if idx <= cfg["fm_idx"] :
-                            feature = new_feature.detach()
-                            loss = criterion(out, target)  
-                        else:
-                            loss = criterion(out, target) + nn.functional.mse_loss(new_feature[:,:feature.shape[1]], feature)
-                            add_new_feature = new_feature.detach()
-                            feature = torch.cat((feature, add_new_feature[:,feature.shape[1]:]),1)
-                    else:
+               
+            for idx in range(width_idx+1):               
+                out = net(x, idx)
+                if cfg["self_dist"] and round > 2: 
+                    if idx == 0:
+                        logits = nn.functional.softmax(out, dim=1).detach()
                         loss = criterion(out, target)
-                    loss.backward()
-                optimizer.step()
-            else:   
-                for idx in range(width_idx+1):               
-                    out = net(x, idx)
-                    if cfg["self_dist"] and round > 2: 
-                        if idx == 0:
+                    else:
+                        loss = torch.mean(soft_criterion(out, logits)) + criterion(out, target)
+                        if cfg["recc_dist"]:
                             logits = nn.functional.softmax(out, dim=1).detach()
-                            loss = criterion(out, target)
-                        else:
-                            loss = torch.mean(soft_criterion(out, logits)) + criterion(out, target)
-                            if cfg["recc_dist"]:
-                                logits = nn.functional.softmax(out, dim=1).detach()
-                    else:
-                        loss = criterion(out, target)
-                    loss.backward()
-                    net.clear_grad(idx)
-                    optimizer.step()
+                else:
+                    loss = criterion(out, target)
+                loss.backward()
+            optimizer.step()
     test_acc = []
     for idx in range(width_idx+1):         
         test_acc.append(compute_acc(net, idx, test_data_loader))        
@@ -95,7 +76,6 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
 
 args, cfg = get_args()
 X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(args.dataset, args.datadir, args.logdir, args.partition, cfg['client_num'], beta=args.beta)
-
 
 n_party_per_round = int(cfg['client_num'] * args.sample_fraction)
 party_list = [i for i in range(cfg['client_num'])]
@@ -112,22 +92,14 @@ train_dl_global, test_dl, train_ds_global, test_ds_global = get_dataloader(args.
                                                                             args.batch_size,
                                                                             32)
 train_local_dls = []
-if args.dataset == 'cifar10':
-    model = resnet18
-elif args.dataset == 'cifar100':
-    model = resnet34
-else:
-    model = resnet50
 
-global_model = model(cfg, cfg['global_width_idx'])
+global_model = resnet18(cfg, cfg['global_width_idx'])
+
 global_parameters = global_model.state_dict()
 local_models = []
 local_parameters_dict = dict()
-
-agg_weight = []
 for i in range(cfg['client_num']):
-    agg_weight.append(len(net_dataidx_map[i])/len(X_train))
-    local_models.append(model(cfg, cfg['model_width_idx'][i]))
+    local_models.append(resnet18(cfg, cfg['model_width_idx'][i]))
     if cfg['model_width_idx'][i] not in local_parameters_dict:     
         local_parameters_dict[cfg['model_width_idx'][i]] = local_models[i].state_dict()
     dataidxs = net_dataidx_map[i]
@@ -139,9 +111,8 @@ for i in range(cfg['client_num']):
 #     print(k)
 # time.sleep(1000)
 
-federation = Federation(global_parameters, local_parameters_dict, agg_weight, cfg)
-best_result = [0 for _ in range(cfg['global_width_idx']+1)]
-best_acc = 0
+federation = Federation(global_parameters, local_parameters_dict, cfg)
+best_acc = [0 for _ in range(cfg['global_width_idx']+1)]
 print(cfg)
 
 for round in range(cfg["comm_round"]):
@@ -180,19 +151,13 @@ for round in range(cfg["comm_round"]):
     #     for i, (x, target) in enumerate(train_dl_global):
     #         # for width_idx in range(cfg['global_width_idx']+1):
     #         global_model(x.cuda(), cfg['global_width_idx'])
-    update_result = False
-    new_result = []
     for width_idx in range(cfg['global_width_idx']+1):
         acc = compute_acc(global_model, width_idx, test_dl)
-        new_result.append(acc)
-        if best_acc < acc:
-            best_acc = acc
-            update_result = True
-        print("Round %d, width %.2f, Global Accuracy: %f" % (round, cfg['model_width_list'][width_idx], acc))
-    if update_result:
-        best_result = new_result
-        print("Round %d, New Best Global Accuracy!" % (round))
-    else:
-        print("History best:",best_result)
+        if best_acc[width_idx] < acc:
+            best_acc[width_idx] = acc
+            print("Round %d, width %.2f, New Best Global Accuracy: %f" % (round, cfg['model_width_list'][width_idx], acc))
+        else:
+            print("Round %d, width %.2f, Global Accuracy: %f, Best Accuracy: %f" % (round, cfg['model_width_list'][width_idx], acc, best_acc[width_idx]))
+
     global_model.to('cpu')
 print(cfg)

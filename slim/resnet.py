@@ -39,23 +39,30 @@ class SlimmableConv2d(nn.Conv2d):
         self.in_channels_list = in_channels_list
         self.out_channels_list = out_channels_list
         self.groups_list = groups_list
+        self.kernel_size = kernel_size
         if self.groups_list == [1]:
             self.groups_list = [1 for _ in range(len(in_channels_list))]
 
     def forward(self, input, width_idx):
-        self.in_channels = self.in_channels_list[width_idx]
-        self.out_channels = self.out_channels_list[width_idx]
-        self.groups = self.groups_list[width_idx]
-        weight = self.weight[:self.out_channels, :self.in_channels, :, :]
+        in_channels = self.in_channels_list[width_idx]
+        out_channels = self.out_channels_list[width_idx]
+        groups = self.groups_list[width_idx]
+        weight = self.weight[:out_channels, :in_channels, :, :]
         if self.bias is not None:
-            bias = self.bias[:self.out_channels]
+            bias = self.bias[:out_channels]
         else:
             bias = self.bias
         y = nn.functional.conv2d(
             input, weight, bias, self.stride, self.padding,
-            self.dilation, self.groups)
+            self.dilation, groups)
         return y
-
+    
+    def clear_grad(self, width_idx):
+        if width_idx > 0:
+            self.weight.grad[:self.out_channels_list[width_idx - 1], :self.in_channels_list[width_idx - 1], : , : ] *= 0
+            if self.bias is not None:
+                self.bias.grad[:self.out_channels_list[width_idx - 1]] *= 0
+                
 
 class SlimmableLinear(nn.Linear):
     def __init__(self, in_features_list, out_features_list, bias=True):
@@ -73,6 +80,12 @@ class SlimmableLinear(nn.Linear):
         else:
             bias = self.bias
         return nn.functional.linear(input, weight, bias)
+    
+    def clear_grad(self, width_idx):
+        if width_idx > 0:
+            self.weight.grad[:self.out_features_list[width_idx - 1], :self.in_features_list[width_idx - 1]] *= 0
+            if self.bias is not None:
+                self.bias.grad[:self.out_features_list[width_idx - 1]] *= 0
      
 class Block(nn.Module):
     expansion = 1
@@ -96,6 +109,11 @@ class Block(nn.Module):
         out += shortcut
         return out
 
+    def clear_grad(self, width_idx):
+        if hasattr(self, 'shortcut'):
+            self.shortcut.clear_grad(width_idx)
+        self.conv1.clear_grad(width_idx)
+        self.conv2.clear_grad(width_idx)
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -164,6 +182,18 @@ class ResNet(nn.Module):
         if return_feature:
             return logits, feature
         return logits
+
+    def clear_grad(self, width_idx):
+        for layer in self.layer1:
+            layer.clear_grad(width_idx)
+        for layer in self.layer2:
+            layer.clear_grad(width_idx)
+        for layer in self.layer3:
+            layer.clear_grad(width_idx)
+        for layer in self.layer4:
+            layer.clear_grad(width_idx)            
+        self.conv1.clear_grad(width_idx)
+        self.linear.clear_grad(width_idx)
 
 
 def resnet18(cfg, width_idx):

@@ -4,20 +4,12 @@ import time
 
 import numpy as np
 import torch
-from slim.config import get_args
-from slim.resnet import resnet18,resnet34,resnet50
-from slim.fed import Federation
+from fedpyramid.config import get_args
+from fedpyramid.resnet import resnet18,resnet34,resnet50
+from fedpyramid.fed import Federation
 from utils import *
 
-class CrossEntropyLossSoft(torch.nn.modules.loss._Loss):
-    """ inplace distillation for image classification """
-    def forward(self, output, target):
-        output_log_prob = torch.nn.functional.log_softmax(output, dim=1)
-        target = target.unsqueeze(1)
-        output_log_prob = output_log_prob.unsqueeze(2)
-        cross_entropy_loss = -torch.bmm(target, output_log_prob)
-        return cross_entropy_loss
-    
+
 def compute_acc(net, width_idx, test_data_loader):
     net.eval()
     correct, total = 0, 0
@@ -30,8 +22,15 @@ def compute_acc(net, width_idx, test_data_loader):
             correct += (pred_label == target.data).sum().item()
     return correct / float(total)
 
-def local_train(round, net, width_idx, para, train_data_loader, test_data_loader, cfg):
+def local_train(training_phase, net, width_idx, para, train_data_loader, test_data_loader, cfg):
     net.load_state_dict(para)
+    for i in range(min(training_phase, width_idx + 1)):
+        print("freeze: ",i)
+        convname = 'pyramidconv.' + str(i)
+        bnname = 'bn' + str(i)
+        for param in net.named_parameters():
+            if(convname in param[0] or bnname in param[0]):
+                param[1].requires_grad = False
     net.cuda()
     net.train()
     if cfg["optimizer"] == 'adam':
@@ -43,57 +42,34 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
         optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=cfg["lr"], momentum=0.9,
                               weight_decay=cfg["reg"])
     criterion = nn.CrossEntropyLoss()
-    soft_criterion = CrossEntropyLossSoft(reduction='none')
-    # test_acc = []
-    # for idx in range(width_idx+1):         
-    #     test_acc.append(compute_acc(net, idx, test_data_loader)) 
-    # test_acc = compute_acc(net, test_data_loader) 
+
     for epoch in range(cfg["epochs"]):
         for batch_idx, (x, target) in enumerate(train_data_loader):
             x, target = x.cuda(), target.cuda()
 
             optimizer.zero_grad()
             target = target.long()
-            if cfg["feature_match"]:
-                for idx in range(width_idx+1):               
-                    out, new_feature = net(x, idx, True)
-                    if round > 2:
-                        if idx <= cfg["fm_idx"] :
-                            feature = new_feature.detach()
-                            loss = criterion(out, target)  
-                        else:
-                            loss = criterion(out, target) + nn.functional.mse_loss(new_feature[:,:feature.shape[1]], feature)
-                            add_new_feature = new_feature.detach()
-                            feature = torch.cat((feature, add_new_feature[:,feature.shape[1]:]),1)
-                    else:
-                        loss = criterion(out, target)
-                    loss.backward()
-                optimizer.step()
-            else:   
-                for idx in range(width_idx+1):               
-                    out = net(x, idx)
-                    if cfg["self_dist"] and round > 2: 
-                        if idx == 0:
-                            logits = nn.functional.softmax(out, dim=1).detach()
-                            loss = criterion(out, target)
-                        else:
-                            loss = torch.mean(soft_criterion(out, logits)) + criterion(out, target)
-                            if cfg["recc_dist"]:
-                                logits = nn.functional.softmax(out, dim=1).detach()
-                    else:
-                        loss = criterion(out, target)
-                    loss.backward()
-                    net.clear_grad(idx)
-                    optimizer.step()
+ 
+            for idx in range(width_idx + 1):
+                out = net(x, idx)
+                loss = criterion(out, target)
+                loss.backward()
+            optimizer.step()
     test_acc = []
-    for idx in range(width_idx+1):         
-        test_acc.append(compute_acc(net, idx, test_data_loader))        
+    for idx in range(width_idx + 1):
+        test_acc.append(compute_acc(net, idx, test_data_loader))
     net.to('cpu')
     return test_acc
 
 
 
 args, cfg = get_args()
+seed = args.init_seed
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
+random.seed(seed)
 X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(args.dataset, args.datadir, args.logdir, args.partition, cfg['client_num'], beta=args.beta)
 
 
@@ -135,43 +111,30 @@ for i in range(cfg['client_num']):
     train_local_dls.append(train_dl_local)
     
 
-# for k, v in local_parameters_dict.items():
-#     print(k)
+# i = 0
+# for param in global_model.named_parameters():
+#     name = 'pyramidconv.' + str(i)
+#     if(name in param[0]):
+#         print(param[0])
 # time.sleep(1000)
 
 federation = Federation(global_parameters, local_parameters_dict, agg_weight, cfg)
-best_result = [0 for _ in range(cfg['global_width_idx']+1)]
+best_result = [0 for _ in range(cfg['global_width_idx'] + 1)]
 best_acc = 0
 print(cfg)
-
-for round in range(cfg["comm_round"]):
+training_phase = 0
+for round in range((cfg['global_width_idx'] + 1) * 50):
+    training_phase = int(round / 50)
     user_idx = party_list_rounds[round]
     local_parameters = federation.distribute(user_idx)
     for idx, i in enumerate(user_idx):
-        acc_list = local_train(round, local_models[i], cfg['model_width_idx'][i], local_parameters[idx], train_local_dls[i], test_dl, cfg)
+        acc_list = local_train(training_phase, local_models[i], cfg['model_width_idx'][i], local_parameters[idx], train_local_dls[i], test_dl, cfg)
         for width_idx, acc in enumerate(acc_list):
             print("Round %d, client %d, max_width %.2f, width %.2f, local_acc: %f" % (round, i, cfg['model_width_list'][cfg['model_width_idx'][i]], cfg['model_width_list'][width_idx], acc))
-        if cfg["nova"]:
-            model_dict = local_models[i].state_dict()
-            for key in model_dict:
-                local_parameters[idx][key] = model_dict[key] - local_parameters[idx][key]
-        else:
-            local_parameters[idx] = copy.deepcopy(local_models[i].state_dict())
+        local_parameters[idx] = copy.deepcopy(local_models[i].state_dict())
 
-    # torch.save(local_parameters[0],"net1.pkl")
-    # torch.save(local_parameters[1],"net2.pkl")
-    # local_parameters[0] = torch.load("net1.pkl")
-    # local_parameters[1] = torch.load("net2.pkl")
-    # local_models[0].load_state_dict(local_parameters[0])
-    # local_models[0].cuda()
-    # acc = compute_acc(local_models[0], 0, test_dl)
-    # print("local model acc: ",acc)
-    # for key in global_parameters:
-    #     global_parameters[key] = local_parameters[0][key] * 0.5 + local_parameters[1][key] * 0.5
-    if cfg["nova"]:
-        federation.nova_combine(local_parameters, user_idx)
-    else:        
-        federation.combine(local_parameters, user_idx)
+   
+    federation.combine(local_parameters, user_idx)
     global_model.load_state_dict(federation.global_parameters)
     global_model.cuda()
     # Esitimate BN statics
@@ -188,10 +151,10 @@ for round in range(cfg["comm_round"]):
         if best_acc < acc:
             best_acc = acc
             update_result = True
-        print("Round %d, width %.2f, Global Accuracy: %f" % (round, cfg['model_width_list'][width_idx], acc))
+        print("Round %d, phase %d, width %.2f, Global Accuracy: %f" % (round, training_phase, cfg['model_width_list'][width_idx], acc))
     if update_result:
         best_result = new_result
-        print("Round %d, New Best Global Accuracy!" % (round))
+        print("Round %d, phase %d, New Best Global Accuracy!" % (round, training_phase))
     else:
         print("History best:",best_result)
     global_model.to('cpu')
