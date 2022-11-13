@@ -53,8 +53,8 @@ def get_args():
     cfg["self_dist"] = False
     cfg["recc_dist"] = False
     cfg["nova"] = False
-    cfg["feature_match"] = False
-    cfg["fm_idx"] = 0
+    cfg["feature_match"] = True
+    cfg["fm_idx"] = 1
     if args.dataset in {'mnist', 'cifar10', 'svhn', 'fmnist'}:
         cfg['classes_size'] = 10
         cfg['data_shape'] = [3, 32, 32]
@@ -85,5 +85,5 @@ def get_args():
     cfg['client_num'] = len(cfg['model_width_idx'])
     args.partition = "noniid"
     cfg["partition"] = args.partition
-    os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "7"
     return args , cfg

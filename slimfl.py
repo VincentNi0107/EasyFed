@@ -68,7 +68,8 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
                     else:
                         loss = criterion(out, target)
                     loss.backward()
-                optimizer.step()
+                    net.clear_grad(idx)
+                    optimizer.step()
             else:   
                 for idx in range(width_idx+1):               
                     out = net(x, idx)
