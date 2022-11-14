@@ -18,6 +18,27 @@ class CrossEntropyLossSoft(torch.nn.modules.loss._Loss):
         cross_entropy_loss = -torch.bmm(target, output_log_prob)
         return cross_entropy_loss
     
+class KL_Loss(nn.Module):
+    def __init__(self, temperature=1):
+        super(KL_Loss, self).__init__()
+        self.T = temperature
+
+    def forward(self, output_batch, teacher_outputs):
+        # output_batch  -> B X num_classes
+        # teacher_outputs -> B X num_classes
+
+        # loss_2 = -torch.sum(torch.sum(torch.mul(F.log_softmax(teacher_outputs,dim=1), F.softmax(teacher_outputs,dim=1)+10**(-7))))/teacher_outputs.size(0)
+        # print('loss H:',loss_2)
+
+        output_batch = F.log_softmax(output_batch / self.T, dim=1)
+        teacher_outputs = F.softmax(teacher_outputs / self.T, dim=1) + 10 ** (-7)
+
+        loss = self.T * self.T * nn.KLDivLoss(reduction='batchmean')(output_batch, teacher_outputs)
+
+        # Same result KL-loss implementation
+        # loss = T * T * torch.sum(torch.sum(torch.mul(teacher_outputs, torch.log(teacher_outputs) - output_batch)))/teacher_outputs.size(0)
+        return loss
+    
 def compute_acc(net, width_idx, test_data_loader):
     net.eval()
     correct, total = 0, 0
@@ -33,7 +54,6 @@ def compute_acc(net, width_idx, test_data_loader):
 def local_train(round, net, width_idx, para, train_data_loader, test_data_loader, cfg):
     net.load_state_dict(para)
     net.cuda()
-    net.train()
     if cfg["optimizer"] == 'adam':
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=cfg["lr"], weight_decay=cfg["reg"])
     elif cfg["optimizer"] == 'amsgrad':
@@ -43,22 +63,34 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
         optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=cfg["lr"], momentum=0.9,
                               weight_decay=cfg["reg"])
     criterion = nn.CrossEntropyLoss()
-    soft_criterion = CrossEntropyLossSoft(reduction='none')
+    kd_loss = KL_Loss()
     # test_acc = []
     # for idx in range(width_idx+1):         
     #     test_acc.append(compute_acc(net, idx, test_data_loader)) 
     # test_acc = compute_acc(net, test_data_loader) 
+    if cfg["knowledge_transfer"] and round > 2:
+        logits_list = []
+        net.eval()
+        with torch.no_grad():
+            for x, target in train_data_loader:
+                teacher_logits = []
+                for idx in range(width_idx + 1):
+                    x, target = x.cuda(), target.to(dtype=torch.int64).cuda()
+                    out = net(x, idx)
+                    teacher_logits.append(out.detach())
+                logits_list.append(torch.mean(torch.stack(teacher_logits, dim=-1), dim=-1).cpu())
+    net.train()
     for epoch in range(cfg["epochs"]):
         for batch_idx, (x, target) in enumerate(train_data_loader):
             x, target = x.cuda(), target.cuda()
 
             optimizer.zero_grad()
             target = target.long()
-            if cfg["feature_match"]:
-                for idx in range(width_idx+1):               
+            if cfg["feature_kd"]:
+                for idx in range(width_idx + 1):               
                     out, new_feature = net(x, idx, True)
                     if round > 2:
-                        if idx <= cfg["fm_idx"] :
+                        if idx <= cfg["fkd_idx"] :
                             feature = new_feature.detach()
                             loss = criterion(out, target)  
                         else:
@@ -70,22 +102,42 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
                     loss.backward()
                     net.clear_grad(idx)
                     optimizer.step()
-            else:   
-                for idx in range(width_idx+1):               
+            elif cfg["self_dist"]:   
+                out = net(x, width_idx)
+                loss = criterion(out, target)
+                loss.backward()
+                net.clear_grad(width_idx)
+                optimizer.step()
+                teacher_logits = out.detach()
+                for idx in range(width_idx):               
                     out = net(x, idx)
-                    if cfg["self_dist"] and round > 2: 
-                        if idx == 0:
-                            logits = nn.functional.softmax(out, dim=1).detach()
-                            loss = criterion(out, target)
-                        else:
-                            loss = torch.mean(soft_criterion(out, logits)) + criterion(out, target)
-                            if cfg["recc_dist"]:
-                                logits = nn.functional.softmax(out, dim=1).detach()
-                    else:
-                        loss = criterion(out, target)
+                    loss = kd_loss(out, teacher_logits) + criterion(out, target)
                     loss.backward()
                     net.clear_grad(idx)
                     optimizer.step()
+            elif cfg["knowledge_transfer"] and round > 2:
+                teacher_logits = logits_list[batch_idx].cuda()
+                for idx in range(width_idx + 1):               
+                    out = net(x, idx)
+                    loss = criterion(out, target) + kd_loss(out, teacher_logits)
+                    teacher_logits.cpu()
+                    loss.backward()
+                    net.clear_grad(idx)
+                    optimizer.step()
+            elif cfg["fedslim"]:
+                for idx in range(width_idx + 1):
+                    out = net(x, idx)
+                    loss = criterion(out, target)
+                    loss.backward()
+                optimizer.step()                
+            else:
+                for idx in range(width_idx + 1):
+                    out = net(x, idx)
+                    loss = criterion(out, target)
+                    loss.backward()
+                    net.clear_grad(idx)
+                    optimizer.step()
+                    
     test_acc = []
     for idx in range(width_idx+1):         
         test_acc.append(compute_acc(net, idx, test_data_loader))        
@@ -95,6 +147,13 @@ def local_train(round, net, width_idx, para, train_data_loader, test_data_loader
 
 
 args, cfg = get_args()
+
+seed = args.init_seed
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+random.seed(seed)
+
 X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(args.dataset, args.datadir, args.logdir, args.partition, cfg['client_num'], beta=args.beta)
 
 

@@ -13,7 +13,7 @@ def get_args():
     parser.add_argument('--alg', type=str, default='fedavg',
                         help='communication strategy: fedavg/fedprox')
     parser.add_argument('--comm_round', type=int, default=100, help='number of maximum communication roun')
-    parser.add_argument('--init_seed', type=int, default=0, help="Random seed")
+    parser.add_argument('--init_seed', type=int, default=1, help="Random seed")
     parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
     parser.add_argument('--datadir', type=str, required=False, default="./data/", help="Data directory")
     parser.add_argument('--reg', type=float, default=1e-5, help="L2 regularization strength")
@@ -50,11 +50,12 @@ def get_args():
     cfg["lr"] = args.lr
     cfg["reg"] = args.reg
     cfg["epochs"] = args.epochs
-    cfg["self_dist"] = False
-    cfg["recc_dist"] = False
+    cfg["feature_kd"] = False
+    cfg["fkd_idx"] = 1
+    cfg["self_dist"] = True
+    cfg["knowledge_transfer"] = False
+    cfg["fedslim"] = False
     cfg["nova"] = False
-    cfg["feature_match"] = True
-    cfg["fm_idx"] = 1
     if args.dataset in {'mnist', 'cifar10', 'svhn', 'fmnist'}:
         cfg['classes_size'] = 10
         cfg['data_shape'] = [3, 32, 32]
@@ -85,5 +86,5 @@ def get_args():
     cfg['client_num'] = len(cfg['model_width_idx'])
     args.partition = "noniid"
     cfg["partition"] = args.partition
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2"
     return args , cfg
