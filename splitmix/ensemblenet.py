@@ -3,6 +3,38 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
+import math
+from torch.nn.modules.conv import _ConvNd
+
+### helper
+def kaiming_uniform_in_(tensor, a=0, mode='fan_in', scale=1., nonlinearity='leaky_relu'):
+    """Modified from torch.nn.init.kaiming_uniform_"""
+    fan_in = nn.init._calculate_correct_fan(tensor, mode)
+    fan_in *= scale
+    gain = nn.init.calculate_gain(nonlinearity, a)
+    std = gain / math.sqrt(fan_in)
+    bound = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
+    with torch.no_grad():
+        return tensor.uniform_(-bound, bound)
+
+def scale_init_param(m, scale_in=1.):
+    """Scale w.r.t. input dim."""
+    if isinstance(m, (nn.Linear, _ConvNd)):
+        kaiming_uniform_in_(m.weight, a=math.sqrt(5), scale=scale_in, mode='fan_in')
+        if m.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(m.weight)
+            fan_in *= scale_in
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(m.bias, -bound, bound)
+    return m
+
+def init_param(m):
+    if isinstance(m, (nn.BatchNorm2d, nn.InstanceNorm2d)):
+        m.weight.data.fill_(1)
+        m.bias.data.zero_()
+    elif isinstance(m, nn.Linear):
+        m.bias.data.zero_()
+    return m
 
 class Block(nn.Module):
     expansion = 1
@@ -27,9 +59,10 @@ class Block(nn.Module):
         return out
     
 class ResNet(nn.Module):
-    def __init__(self, hidden_size, block, num_blocks, num_classes, width):
+    def __init__(self, cfg, hidden_size, block, num_blocks, num_classes, width):
         super(ResNet, self).__init__()
         self.in_planes = hidden_size[0]
+        self.cfg = cfg
         self.conv1 = nn.Conv2d(3, int(hidden_size[0] * width), kernel_size=3, stride=1, padding=1, bias=False)
         self.layer1 = self._make_layer(block, hidden_size[0], num_blocks[0], width, stride=1)
         self.layer2 = self._make_layer(block, hidden_size[1], num_blocks[1], width, stride=2)
@@ -65,13 +98,25 @@ class ResNet(nn.Module):
 
 
 class EnsembleNet(nn.Module):
-    def __init__(self, cfg, width_idx):
+    def __init__(self, cfg, width_idx, width_list, rescale_init = True):
         super(EnsembleNet, self).__init__()
         self.num_ens = int(cfg['model_width_list'][width_idx] / cfg['atom_width']) # 1.0/0.125 = 8
         self.atom_models = nn.ModuleList([ResNet(cfg['hidden_size'], Block, [2, 2, 2, 2], cfg['classes_size'], cfg['atom_width']) for _ in range(self.num_ens)])
-        
+        ### additional params
+        self.rescale_init = rescale_init
+        self.width_scale =  1. / width_list[width_idx]
+
         #TODO initialize models
-        
+        for model in self.atom_models:
+            model.apply(init_param)     ### BN, linear
+        self.reset_parameters(self, inp_nonscale_layers=['conv1'])
+
+    ### initialize conv    
+    def reset_parameters(self, inp_nonscale_layers):
+        if self.rescale_init and self.width_scale != 1.:
+            for name, m in self._modules.items():
+                if name not in inp_nonscale_layers:  # NOTE ignore the layer with non-slimmable inp.
+                    m.apply(lambda _m: scale_init_param(_m, scale_in=1./self.width_scale))
         
     def forward(self, x):
         logits = [atom_model(x) for atom_model in self.atom_models]
