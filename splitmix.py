@@ -1,12 +1,11 @@
 import random
 import copy
 import time
-
 import numpy as np
 import torch
-from splitmix.config import get_args
-from splitmix.ensemblenet import EnsembleNet
-from splitmix.fed import Federation
+from spm.config import get_args
+from spm.ensemblenet import EnsembleNet
+from spm.fed import Federation
 from utils import *
 
 def compute_acc(net, test_data_loader):
@@ -41,7 +40,7 @@ def local_train(round, net, para, train_data_loader, test_data_loader, cfg):
 
             optimizer.zero_grad()
             target = target.long()        
-            out = net(x, idx)
+            out = net(x)
             loss = criterion(out, target)
             loss.backward()
             optimizer.step()
@@ -73,15 +72,17 @@ train_dl_global, test_dl, train_ds_global, test_ds_global = get_dataloader(args.
 train_local_dls = []
 model = EnsembleNet
 
-global_model = model(cfg, cfg['global_width_idx'])
+# [atom_model, ... , atom_model] -> len(num_base)
+global_model = model(cfg, cfg['global_width_idx'], cfg['model_width_list'])
 atom_parameters_list = global_model.get_all_state_dict()
 local_models = []
 local_parameters_dict = dict()
 
 agg_weight = []
 for i in range(cfg['client_num']):
-    agg_weight.append(len(net_dataidx_map[i])/len(X_train))
-    local_models.append(model(cfg, cfg['model_width_idx'][i]))
+    agg_weight.append(len(net_dataidx_map[i])/len(X_train))               ### set to 1 / num
+    # [atom_models(len:num_ens), ... , atom_models(len:num_ens)] -> len(num_users)
+    local_models.append(model(cfg, cfg['model_width_idx'][i], cfg['model_width_list']))
     # if cfg['model_width_idx'][i] not in local_parameters_dict:     
     #     local_parameters_dict[cfg['model_width_idx'][i]] = local_models[i].state_dict()
     dataidxs = net_dataidx_map[i]
@@ -97,18 +98,19 @@ federation = Federation(atom_parameters_list, agg_weight, cfg)
 best_result = [0 for _ in range(cfg['global_width_idx']+1)]
 best_acc = 0
 print(cfg)
-
+num_base = int(1. / cfg['atom_width'])
 for round in range(cfg["comm_round"]):
     user_idx = party_list_rounds[round]
-    local_parameters = federation.distribute(user_idx)
+    local_parameters, slim_shifts_per_usr = federation.distribute(user_idx, cfg, global_model)
     for idx, i in enumerate(user_idx):
-        acc_list = local_train(round, local_models[i], local_parameters[idx], train_local_dls[i], test_dl, cfg)
-        for width_idx, acc in enumerate(acc_list):
-            print("Round %d, client %d, max_width %.2f, width %.2f, local_acc: %f" % (round, i, cfg['model_width_list'][cfg['model_width_idx'][i]], acc))
-        local_parameters[idx] = copy.deepcopy(local_models[i].state_dict())
+        acc = local_train(round, local_models[i], local_parameters[idx], train_local_dls[i], test_dl, cfg)
+        print("Round %d, client %d, width %.3f, local_acc: %f" % (round, i, cfg['model_width_list'][cfg['model_width_idx'][i]], acc))
+        for idx1, param1 in enumerate(local_parameters[idx]):
+                local_parameters[idx][idx1] = copy.deepcopy(local_models[i]._modules['atom_models'][idx1].state_dict())
 
-    federation.combine(local_parameters, user_idx)
-    global_model.load_state_dict(federation.global_parameters)
+    global_parameters = global_model.get_all_state_dict()
+    global_parameters = federation.combine(global_parameters, local_parameters, user_idx, slim_shifts_per_usr, agg_weight, num_base)
+    global_model.load_all_state_dict(global_parameters)
     global_model.cuda()
     # Esitimate BN statics
     # with torch.no_grad():
@@ -117,18 +119,19 @@ for round in range(cfg["comm_round"]):
     #         # for width_idx in range(cfg['global_width_idx']+1):
     #         global_model(x.cuda(), cfg['global_width_idx'])
     update_result = False
-    new_result = []
-    for width_idx in range(cfg['global_width_idx']+1):
-        acc = compute_acc(global_model, width_idx, test_dl)
-        new_result.append(acc)
-        if best_acc < acc:
-            best_acc = acc
-            update_result = True
-        print("Round %d, width %.2f, Global Accuracy: %f" % (round, cfg['model_width_list'][width_idx], acc))
+    # new_result = []
+    # for width_idx in range(cfg['global_width_idx']+1):
+    acc = compute_acc(global_model, test_dl)
+    # new_result.append(acc)
+    if best_acc < acc:
+        best_acc = acc
+        update_result = True
+    print("Round %d, Global Accuracy: %f" % (round, acc))
     if update_result:
-        best_result = new_result
+        best_result = best_acc
         print("Round %d, New Best Global Accuracy!" % (round))
     else:
-        print("History best:",best_result)
+        print("History best:",best_acc)
     global_model.to('cpu')
 print(cfg)
+
