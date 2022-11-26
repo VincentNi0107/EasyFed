@@ -30,6 +30,8 @@ class Federation:
             count_weight = 0        ### e.g total 0.3, -> weight 0.1/0.3 & 0.2/0.3
             for idx, slim_shifts in enumerate(slim_shifts_per_usr):
                 if base_i in slim_shifts:
+                    user_id = user_idx[idx]
+                    weight = agg_weight[user_id]
                     count_weight += weight
     
             for idx, slim_shifts in enumerate(slim_shifts_per_usr):
