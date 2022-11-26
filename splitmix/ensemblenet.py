@@ -50,11 +50,11 @@ class Block(nn.Module):
         if stride != 1 or in_planes != self.expansion * planes:
             self.shortcut = nn.Conv2d(int(in_planes * width), int(self.expansion * planes * width), kernel_size=1, stride=stride, bias=False)
 
-    def forward(self, x, width_idx):
-        out = F.relu(self.n1(x, width_idx))
-        shortcut = self.shortcut(out, width_idx) if hasattr(self, 'shortcut') else x
-        out = self.conv1(out, width_idx)
-        out = self.conv2(F.relu(self.n2(out, width_idx)), width_idx)
+    def forward(self, x):
+        out = F.relu(self.n1(x))
+        shortcut = self.shortcut(out) if hasattr(self, 'shortcut') else x
+        out = self.conv1(out)
+        out = self.conv2(F.relu(self.n2(out)))
         out += shortcut
         return out
     
@@ -101,7 +101,7 @@ class EnsembleNet(nn.Module):
     def __init__(self, cfg, width_idx, width_list, rescale_init = True):
         super(EnsembleNet, self).__init__()
         self.num_ens = int(cfg['model_width_list'][width_idx] / cfg['atom_width']) # 1.0/0.125 = 8
-        self.atom_models = nn.ModuleList([ResNet(cfg['hidden_size'], Block, [2, 2, 2, 2], cfg['classes_size'], cfg['atom_width']) for _ in range(self.num_ens)])
+        self.atom_models = nn.ModuleList([ResNet(cfg, cfg['hidden_size'], Block, [2, 2, 2, 2], cfg['classes_size'], cfg['atom_width']) for _ in range(self.num_ens)])
         ### additional params
         self.rescale_init = rescale_init
         self.width_scale =  1. / width_list[width_idx]
@@ -109,7 +109,7 @@ class EnsembleNet(nn.Module):
         #TODO initialize models
         for model in self.atom_models:
             model.apply(init_param)     ### BN, linear
-        self.reset_parameters(self, inp_nonscale_layers=['conv1'])
+        self.reset_parameters(inp_nonscale_layers=['conv1'])
 
     ### initialize conv    
     def reset_parameters(self, inp_nonscale_layers):
@@ -121,7 +121,7 @@ class EnsembleNet(nn.Module):
     def forward(self, x):
         logits = [atom_model(x) for atom_model in self.atom_models]
         if len(logits) > 1:
-            logits = torch.mean(torch.stack(logits, dim=-1), dim=-1)
+            logits = torch.mean(torch.stack(logits, dim=-1), dim=-1)         ###
         else:
             logits = logits[0]
         return logits
@@ -129,7 +129,11 @@ class EnsembleNet(nn.Module):
     def get_all_state_dict(self):
         model_state_dicts = [copy.deepcopy(atom_model.state_dict()) for atom_model in self.atom_models]
         return model_state_dicts
-            
+
+    def load_all_state_dict(self, global_parameters):
+        for idx, atom_model in enumerate(self.atom_models):
+            self.atom_models[idx].load_state_dict(global_parameters[idx])
+
     def get_state_dict(self, idx):
         return self.atom_models[idx].state_dict()
     
