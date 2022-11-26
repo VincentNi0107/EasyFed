@@ -3,9 +3,9 @@ import copy
 import time
 import numpy as np
 import torch
-from spm.config import get_args
-from spm.ensemblenet import EnsembleNet
-from spm.fed import Federation
+from splitmix.config import get_args
+from splitmix.ensemblenet import EnsembleNet
+from splitmix.fed import Federation
 from utils import *
 
 def compute_acc(net, test_data_loader):
