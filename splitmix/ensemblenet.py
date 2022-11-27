@@ -140,4 +140,3 @@ class EnsembleNet(nn.Module):
     def load_params(self,  model_param_list):
         for i, atom_model in enumerate(self.atom_models):
             atom_model.load_state_dict(model_param_list[i])
-
