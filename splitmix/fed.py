@@ -49,6 +49,7 @@ class Federation:
                         else:
                             temp = (weight / count_weight) * new_tensor
                             old_tensor.add_(temp)
+                        global_parameters[base_i][key].data = old_tensor
             # for key in global_parameters[base_i]:
                 # if 'num_batches_tracked' not in key:
                     # global_parameters[base_i][key].data *= 1. / count_weight        ### divide as a whole?
