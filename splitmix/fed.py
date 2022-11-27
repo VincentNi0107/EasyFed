@@ -47,7 +47,7 @@ class Federation:
                             # num_batches_tracked are the same for all clients for the given datasets
                             old_tensor.copy_(new_tensor)
                         else:
-                            temp = (weight / count_weight) * new_tensor
+                            temp = (weight / count_weight) * (new_tensor - old_tensor)
                             old_tensor.add_(temp)
                         global_parameters[base_i][key].data = old_tensor
             # for key in global_parameters[base_i]:
