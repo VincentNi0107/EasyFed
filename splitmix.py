@@ -52,6 +52,13 @@ def local_train(round, net, para, train_data_loader, test_data_loader, cfg):
 
 
 args, cfg = get_args()
+
+seed = args.init_seed
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+random.seed(seed)
+
 X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(args.dataset, args.datadir, args.logdir, args.partition, cfg['client_num'], beta=args.beta)
 
 
