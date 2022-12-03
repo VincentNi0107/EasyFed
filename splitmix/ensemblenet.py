@@ -118,12 +118,19 @@ class EnsembleNet(nn.Module):
                 if name not in inp_nonscale_layers:  # NOTE ignore the layer with non-slimmable inp.
                     m.apply(lambda _m: scale_init_param(_m, scale_in=1./self.width_scale))
         
-    def forward(self, x):
+    def forward(self, x,  num_models=-1, idx_models=[]):
         logits = [atom_model(x) for atom_model in self.atom_models]
-        if len(logits) > 1:
-            logits = torch.mean(torch.stack(logits, dim=-1), dim=-1)         ###
-        else:
-            logits = logits[0]
+        if num_models == -1:
+            if len(logits) > 1:
+                logits = torch.mean(torch.stack(logits, dim=-1), dim=-1)
+            else:
+                logits = logits[0]
+        if idx_models != []:
+            logits = [logit for idx, logit in enumerate(logits) if idx in idx_models]
+            if len(logits) > 1:
+                logits = torch.mean(torch.stack(logits, dim=-1), dim=-1)
+            else:
+                logits = logits[0]
         return logits
     
     def get_all_state_dict(self):
