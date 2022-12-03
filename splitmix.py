@@ -3,24 +3,44 @@ import copy
 import time
 import numpy as np
 import torch
-from splitmix.config import get_args
-from splitmix.ensemblenet import EnsembleNet
-from splitmix.fed import Federation
+from spm.config import get_args
+from spm.ensemblenet import EnsembleNet
+from spm.fed import Federation
 from utils import *
 
-def compute_acc(net, test_data_loader):
+def choose_min_loss_idx(loss, num_models):
+    sort = sorted(enumerate(loss), key=lambda loss:loss[1])
+    sorted_idx = [s[0] for s in sort]
+    return sorted_idx[0: num_models]
+
+def compute_acc(net, test_data_loader, num_base, num_models=-1):
     net.eval()
-    correct, total = 0, 0
+    correct, total= 0, 0
+    if num_models != -1:
+        loss = [0. for _ in range(num_base)]
     with torch.no_grad():
         for batch_idx, (x, target) in enumerate(test_data_loader):
             x, target = x.cuda(), target.to(dtype=torch.int64).cuda()
-            out = net(x)
-            _, pred_label = torch.max(out.data, 1)
-            total += x.data.size()[0]
-            correct += (pred_label == target.data).sum().item()
+            out = net(x, num_models)
+            if num_models == -1:
+                _, pred_label = torch.max(out.data, 1)
+                total += x.data.size()[0]
+                correct += (pred_label == target.data).sum().item()
+            else:
+                for i in range(len(out)):
+                    loss[i] += nn.CrossEntropyLoss()(out[i], target)
+        if num_models != -1:
+            min_loss_idx = choose_min_loss_idx(loss, num_models)
+            for batch_idx, (x, target) in enumerate(test_data_loader):
+                x, target = x.cuda(), target.to(dtype=torch.int64).cuda()
+                out = net(x, num_models, min_loss_idx)
+                _, pred_label = torch.max(out.data, 1)
+                total += x.data.size()[0]
+                correct += (pred_label == target.data).sum().item()
     return correct / float(total)
 
 def local_train(round, net, para, train_data_loader, test_data_loader, cfg):
+    num_base = int(1. / cfg['atom_width'])
     net.load_params(para)
     net.cuda()
     net.train()
@@ -45,7 +65,7 @@ def local_train(round, net, para, train_data_loader, test_data_loader, cfg):
             loss.backward()
             optimizer.step()
 
-    test_acc = compute_acc(net, test_data_loader)       
+    test_acc = compute_acc(net, test_data_loader, num_base)       
     net.to('cpu')
     return test_acc
 
@@ -87,7 +107,7 @@ local_parameters_dict = dict()
 
 agg_weight = []
 for i in range(cfg['client_num']):
-    agg_weight.append(len(net_dataidx_map[i])/len(X_train))               ### set to 1 / num
+    agg_weight.append(len(net_dataidx_map[i])/len(X_train))
     # [atom_models(len:num_ens), ... , atom_models(len:num_ens)] -> len(num_users)
     local_models.append(model(cfg, cfg['model_width_idx'][i], cfg['model_width_list']))
     # if cfg['model_width_idx'][i] not in local_parameters_dict:     
@@ -100,13 +120,14 @@ for i in range(cfg['client_num']):
 # for k, v in global_parameters.items():
 #     print(k)
 
+best_acc = []
+for i in range(len(cfg['model_width_list'])):  best_acc.append(0)
 
 federation = Federation(atom_parameters_list, agg_weight, cfg)
-best_result = [0 for _ in range(cfg['global_width_idx']+1)]
-best_acc = 0
 print(cfg)
 num_base = int(1. / cfg['atom_width'])
 for round in range(cfg["comm_round"]):
+    per_round_acc = [0 for _ in range(cfg['global_width_idx']+1)]
     user_idx = party_list_rounds[round]
     local_parameters, slim_shifts_per_usr = federation.distribute(user_idx, cfg, global_model)
     for idx, i in enumerate(user_idx):
@@ -125,21 +146,20 @@ for round in range(cfg["comm_round"]):
     #     for i, (x, target) in enumerate(train_dl_global):
     #         # for width_idx in range(cfg['global_width_idx']+1):
     #         global_model(x.cuda(), cfg['global_width_idx'])
-    update_result = False
     # new_result = []
     # for width_idx in range(cfg['global_width_idx']+1):
-    acc = compute_acc(global_model, test_dl)
-    # new_result.append(acc)
-    if best_acc < acc:
-        best_acc = acc
-        update_result = True
-    print("Round %d, Global Accuracy: %f" % (round, acc))
-    if update_result:
-        best_result = best_acc
-        print("Round %d, New Best Global Accuracy!" % (round))
-    else:
-        print("History best:",best_acc)
+
+    for idx, num_models in enumerate(np.array(cfg['model_width_list']) / cfg['atom_width']):
+        num_models = int(num_models)
+        acc = compute_acc(global_model, test_dl, num_base, num_models)
+        per_round_acc[idx] = acc
+        if acc > best_acc[idx]: best_acc[idx] = acc
+
+    for idx, model_width in enumerate(cfg['model_width_list']):
+        print("Round %d, model_width %3f Global Accuracy: %f" % (round, model_width, per_round_acc[idx]))
+        print("History best, model_width %3f, Global Accuracy: %f" % (model_width, best_acc[idx]))
     global_model.to('cpu')
+
 print(cfg)
 
 
